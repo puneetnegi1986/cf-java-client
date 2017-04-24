@@ -19,7 +19,7 @@ package org.cloudfoundry.reactor.util;
 import org.cloudfoundry.reactor.ProxyConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.ipc.netty.options.ClientOptions;
+import reactor.ipc.netty.options.ClientProxyOptions;
 import reactor.ipc.netty.tcp.TcpClient;
 import reactor.util.function.Tuple2;
 import reactor.util.function.Tuples;
@@ -39,6 +39,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 public final class DefaultSslCertificateTruster implements SslCertificateTruster {
 
@@ -113,11 +114,23 @@ public final class DefaultSslCertificateTruster implements SslCertificateTruster
 
     private static TcpClient getTcpClient(Optional<ProxyConfiguration> proxyConfiguration, CertificateCollectingTrustManager collector, String host, int port) {
         return TcpClient.create(options -> {
-            options.connect(host, port)
+            options
+                .host(host).port(port)
                 .disablePool()
                 .sslSupport(ssl -> ssl.trustManager(new StaticTrustManagerFactory(collector)));
 
-            proxyConfiguration.ifPresent(c -> options.proxy(ClientOptions.Proxy.HTTP, c.getHost(), c.getPort().orElse(null), c.getUsername().orElse(null), u -> c.getPassword().orElse(null)));
+            proxyConfiguration
+                .map(c -> {
+                    ClientProxyOptions.Builder proxyOptions = ClientProxyOptions.builder()
+                        .host(c.getHost());
+
+                    c.getPort().ifPresent(proxyOptions::port);
+                    c.getUsername().ifPresent(proxyOptions::username);
+                    c.getPassword().map(password -> (Function<String, String>) s -> password).ifPresent(proxyOptions::password);
+
+                    return proxyOptions.build();
+                })
+                .ifPresent(options::proxyOptions);
         });
     }
 

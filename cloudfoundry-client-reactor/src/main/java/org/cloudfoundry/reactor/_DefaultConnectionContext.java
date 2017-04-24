@@ -33,7 +33,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 import reactor.ipc.netty.http.client.HttpClient;
 import reactor.ipc.netty.http.client.HttpClientRequest;
-import reactor.ipc.netty.options.ClientOptions;
+import reactor.ipc.netty.options.ClientProxyOptions;
 import reactor.ipc.netty.resources.LoopResources;
 import reactor.ipc.netty.resources.PoolResources;
 
@@ -42,6 +42,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -96,13 +97,25 @@ abstract class _DefaultConnectionContext implements ConnectionContext {
                 .option(SO_RCVBUF, RECEIVE_BUFFER_SIZE)
                 .disablePool();
 
-            getConnectionPool().ifPresent(options::poolResources);
-            getKeepAlive().ifPresent(keepAlive -> options.option(SO_KEEPALIVE, keepAlive));
-            getProxyConfiguration().ifPresent(c -> options.proxy(ClientOptions.Proxy.HTTP, c.getHost(), c.getPort().orElse(null), c.getUsername().orElse(null), u -> c.getPassword().orElse(null)));
-            getConnectTimeout().ifPresent(socketTimeout -> options.option(CONNECT_TIMEOUT_MILLIS, (int) socketTimeout.toMillis()));
-
             options.sslSupport(ssl -> getSslCertificateTruster().ifPresent(trustManager -> ssl.trustManager(new StaticTrustManagerFactory(trustManager))));
+
+            getConnectionPool().ifPresent(options::poolResources);
+            getConnectTimeout().ifPresent(socketTimeout -> options.option(CONNECT_TIMEOUT_MILLIS, (int) socketTimeout.toMillis()));
+            getKeepAlive().ifPresent(keepAlive -> options.option(SO_KEEPALIVE, keepAlive));
             getSslHandshakeTimeout().ifPresent(options::sslHandshakeTimeout);
+
+            getProxyConfiguration()
+                .map(c -> {
+                    ClientProxyOptions.Builder proxyOptions = ClientProxyOptions.builder()
+                        .host(c.getHost());
+
+                    c.getPort().ifPresent(proxyOptions::port);
+                    c.getUsername().ifPresent(proxyOptions::username);
+                    c.getPassword().map(password -> (Function<String, String>) s -> password).ifPresent(proxyOptions::password);
+
+                    return proxyOptions.build();
+                })
+                .ifPresent(options::proxyOptions);
         });
     }
 
@@ -189,7 +202,7 @@ abstract class _DefaultConnectionContext implements ConnectionContext {
     Mono<Map<String, String>> getInfo() {
         return getRoot()
             .map(uri -> UriComponentsBuilder.fromUriString(uri).pathSegment("v2", "info").build().encode().toUriString())
-            .then(uri -> getHttpClient()
+            .flatMap(uri -> getHttpClient()
                 .get(uri, request -> Mono.just(request)
                     .map(UserAgent::addUserAgent)
                     .map(JsonCodec::addDecodeHeaders)
