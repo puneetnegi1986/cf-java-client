@@ -5,4 +5,4 @@ set -e -u
 ln -fs $PWD/maven $HOME/.m2
 
 cd cf-java-client
-./mvnw -q package
+./mvnw -U -q package
